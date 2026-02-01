@@ -12,8 +12,8 @@ st.title("📊 GDX/UGL ペアトレード Zスコア判定")
 # サイドバーで設定変更可能にする
 with st.sidebar:
     st.header("設定")
-    window = st.slider("移動平均期間 (日)", 50, 200, 75)
-    z_threshold = st.slider("シグナル閾値 (Z)", 1.0, 3.0, 2.0)
+    window = st.slider("移動平均期間 (日)", 50, 200, 200)
+    z_threshold = st.slider("シグナル閾値 (Z)", 1.0, 3.0, 1.0)
     st.markdown("---")
     st.markdown("**戦略:**\n\nZスコアに応じてポジション調整。\n乖離が異常値(>2.0)の場合はキャップを適用。")
 
@@ -36,6 +36,7 @@ def get_data():
 try:
     with st.spinner('データを取得中...'):
         df = get_data()
+        st.write(f"取得データ数: {len(df)} 行") # ここで500前後なら正常
 
     if df.empty:
         st.error("データの取得に失敗しました。時間をおいて再試行してください。")
@@ -109,7 +110,7 @@ try:
 
     # 3. 生データの確認（オプション）
     with st.expander("詳細データを見る"):
-        st.dataframe(df.tail(10).sort_index(ascending=False))
+        st.dataframe(df.tail(365).sort_index(ascending=False))
 
 except Exception as e:
     st.error(f"エラーが発生しました: {e}")
@@ -122,8 +123,8 @@ with st.form("rebalance_form"):
     # ユーザー入力
     col_calc1, col_calc2 = st.columns(2)
     with col_calc1:
-        current_nlv = st.number_input("現在の口座資産総額 (USD)", value=10000.0, step=100.0)
-        current_ugl_val = st.number_input("現在のUGL保有額 (USD)", value=5000.0, step=100.0)
+        current_nlv = st.number_input("目標ポジション総額 (USD)", value=42000.0, step=100.0)
+        current_ugl_val = st.number_input("現在のUGL保有額 (USD)", value=21000.0, step=100.0)
     with col_calc2:
         # 現在のポジション調整倍率（シグナルに基づく推奨値）
         # ロジック: 基本1.0 + (Zスコアに応じた調整)
@@ -135,7 +136,7 @@ with st.form("rebalance_form"):
         if current_z > 2.0: rec_scale = 0.7
         
         target_scale = st.number_input("ターゲット・ポジション倍率", value=rec_scale, step=0.1, help="1.0=資産と同額, 1.1=10%レバレッジ")
-        current_gdx_val = st.number_input("現在のGDX空売り額 (USD)", value=5000.0, step=100.0)
+        current_gdx_val = st.number_input("現在のGDX空売り額 (USD)", value=21000.0, step=100.0)
 
     submitted = st.form_submit_button("計算する")
 
