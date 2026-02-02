@@ -134,6 +134,7 @@ with st.form("rebalance_form"):
         if current_z < -2.0: rec_scale = 1.2 # キャップ
         if current_z > 1.0: rec_scale = 0.9
         if current_z > 2.0: rec_scale = 0.7
+        if current_z > 3.0: rec_scale = 0.5
         
         target_scale = st.number_input("ターゲット・ポジション倍率", value=rec_scale, step=0.1, help="1.0=資産と同額, 1.1=10%レバレッジ")
         current_gdx_val = st.number_input("現在のGDX空売り額 (USD)", value=24000.0, step=100.0)
