@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots  # 追加: サブプロット用
+from plotly.subplots import make_subplots
 import base64
 import json
 from datetime import datetime, timedelta, date
@@ -43,7 +43,6 @@ def get_market_data(tickers, start_date):
         return pd.DataFrame()
 
     try:
-        # yfinanceの仕様変更等に対応するため、シンプルな取得方法を維持
         raw_data = yf.download(all_symbols, start=start_date, progress=False, auto_adjust=False, threads=False)
     except Exception as e:
         st.error(f"yfinance download failed: {e}")
@@ -298,13 +297,12 @@ def main():
     with st.sidebar:
         st.header("Global Settings")
         
-        c1, c2 = st.columns(2)
-        with c1:
-            total_inv = st.number_input("Initial Capital ($)", value=float(st.session_state.total_investment), step=1000.0, key='total_input')
-            st.session_state.total_investment = total_inv
-        with c2:
-            rf_rate = st.number_input("Risk Free Rate (%)", value=float(st.session_state.risk_free_rate), step=0.1, key='rf_input')
-            st.session_state.risk_free_rate = rf_rate
+        # 修正: 桁が見えやすくなるよう縦並びに変更
+        total_inv = st.number_input("Initial Capital ($)", value=float(st.session_state.total_investment), step=1000.0, key='total_input')
+        st.session_state.total_investment = total_inv
+        
+        rf_rate = st.number_input("Risk Free Rate (%)", value=float(st.session_state.risk_free_rate), step=0.1, key='rf_input')
+        st.session_state.risk_free_rate = rf_rate
 
         start_date_input = st.date_input("Start Date", value=st.session_state.start_date)
         st.session_state.start_date = start_date_input
@@ -484,7 +482,6 @@ def main():
             m6.metric("Sortino Ratio", f"{metrics['sortino']:.2f}")
 
             # --- チャート描画（サブプロット使用） ---
-            # Row 1: Equity (80%), Row 2: Rebalance Points (20%)
             fig = make_subplots(
                 rows=2, cols=1, 
                 shared_xaxes=True, 
@@ -507,12 +504,11 @@ def main():
                 fillcolor='rgba(239, 85, 59, 0.1)'
             ), row=1, col=1)
 
-            # Row 2: Rebalance Markers
+            # Row 2: Rebalance Markers (y=0に一直線)
             rebal_dates = equity_curve.index[rebalance_flags]
             if len(rebal_dates) > 0:
                 fig.add_trace(go.Scatter(
                     x=rebal_dates, 
-                    # y=0 に一直線にプロット
                     y=[0] * len(rebal_dates),
                     mode='markers', name='Rebalance Event',
                     marker=dict(symbol='diamond', size=10, color='gold', line=dict(width=1, color='black'))
@@ -526,7 +522,6 @@ def main():
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             
-            # 軸ラベル調整
             fig.update_yaxes(title_text="Value ($)", row=1, col=1)
             fig.update_yaxes(title_text="Event", showticklabels=False, row=2, col=1)
             fig.update_xaxes(title_text="Date", row=2, col=1)
