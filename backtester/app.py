@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots  # 追加: サブプロット用
 import base64
 import json
 from datetime import datetime, timedelta, date
@@ -42,6 +43,7 @@ def get_market_data(tickers, start_date):
         return pd.DataFrame()
 
     try:
+        # yfinanceの仕様変更等に対応するため、シンプルな取得方法を維持
         raw_data = yf.download(all_symbols, start=start_date, progress=False, auto_adjust=False, threads=False)
     except Exception as e:
         st.error(f"yfinance download failed: {e}")
@@ -105,54 +107,37 @@ def get_market_data(tickers, start_date):
 def run_backtest(prices, weights_config, initial_capital, rebalance_freq, margin_ratios):
     """
     指定されたリバランス頻度でシミュレーションを行う
-    prices: 日次価格データ
-    weights_config: {ticker: target_weight (+/-)}
-    rebalance_freq: 'None', 'D', 'W', 'M', 'Q', 'BA', 'A'
-    margin_ratios: {ticker: ratio (0.0~1.0+)}
     """
     if prices.empty:
-        return None, None, None
+        return None, None, None, None
 
-    # 日付インデックスを正規化
     prices.index = pd.to_datetime(prices.index)
     
-    # 結果格納用
     dates = prices.index
     portfolio_values = np.zeros(len(dates))
     required_margins = np.zeros(len(dates))
-    rebalance_flags = np.zeros(len(dates), dtype=bool) # リバランス実施日
+    rebalance_flags = np.zeros(len(dates), dtype=bool)
     
-    # 現在の保有口数 (shares)
     current_shares = {ticker: 0.0 for ticker in weights_config.keys()}
-    cash_holdings = initial_capital # Cashウェイト分もここに含む実質現金
+    cash_holdings = initial_capital 
 
-    # リバランス日の判定用
+    # リバランス日の判定
     if rebalance_freq == 'None':
-        # 初日のみリバランス
         rb_dates = [dates[0]]
     else:
-        # 頻度文字列の変換 (Pandas offset alias)
         freq_map = {
             'Daily': 'D', 'Weekly': 'W-FRI', 'Monthly': 'ME', 
             'Quarterly': 'QE', 'Semi-Annually': '6ME', 'Annually': 'YE'
         }
         freq_str = freq_map.get(rebalance_freq, 'D')
         
-        # リバランス予定日を生成
         rb_dates_idx = pd.date_range(start=dates[0], end=dates[-1], freq=freq_str)
         
-        # データに存在する直近の営業日にマッピング
-        # asofを使って、各予定日以前の最新営業日を探す、あるいは単に日付のマッチングを行う
-        # ここでは簡易的に「予定日以降の最初の営業日」をリバランス日とする
         rb_dates = []
-        # 初日は必ず実行
-        rb_dates.append(dates[0])
+        rb_dates.append(dates[0]) # 初日は必ず
         
-        # 2回目以降
-        search_idx = 0
         for target_date in rb_dates_idx:
             if target_date <= dates[0]: continue
-            # target_date以降のデータを探す
             future_dates = dates[dates >= target_date]
             if not future_dates.empty:
                 next_date = future_dates[0]
@@ -161,46 +146,39 @@ def run_backtest(prices, weights_config, initial_capital, rebalance_freq, margin
     
     rb_dates_set = set(rb_dates)
 
-    # --- 日次ループ ---
-    # ベクトル化も可能だが、リバランスロジックの可読性のためループ処理
-    
+    # 日次ループ
     for i, date in enumerate(dates):
         price_row = prices.iloc[i]
         
-        # 1. リバランス判定
+        # 1. リバランス判定 & 実行
         if date in rb_dates_set:
             rebalance_flags[i] = True
             
-            # リバランス直前の総資産額を計算
-            # (Shares * Price) + Cash
+            # 現在の総資産額
             current_equity = cash_holdings
             for ticker, shares in current_shares.items():
-                if ticker == 'CASH': continue # Cashはshares管理しない
+                if ticker == 'CASH': continue
                 current_equity += shares * price_row[ticker]
             
-            # 目標構成比に基づいて再配分
-            # Cashポジションは計算上残余として扱うが、weights_configには'CASH'キーが含まれている想定
-            
+            # 再配分
             new_shares = {}
-            new_cash = current_equity # 一旦全額現金化の概念
+            new_cash = current_equity
             
-            # 株式等の購入/空売り
             for ticker, target_w in weights_config.items():
-                if ticker == 'CASH':
-                    continue # Cashは最後に残る
+                if ticker == 'CASH': continue
                 
-                target_amt = current_equity * target_w # Shortならマイナス金額
+                target_amt = current_equity * target_w
                 price = price_row[ticker]
                 
                 if price != 0:
                     shares = target_amt / price
                     new_shares[ticker] = shares
-                    new_cash -= target_amt # 買った分減る、売った(空売り)分増える
+                    new_cash -= target_amt
             
             current_shares = new_shares
             cash_holdings = new_cash
         
-        # 2. その日の資産評価額計算
+        # 2. 評価額計算
         daily_equity = cash_holdings
         daily_margin_req = 0.0
         
@@ -210,18 +188,14 @@ def run_backtest(prices, weights_config, initial_capital, rebalance_freq, margin
             val = shares * price_row[ticker]
             daily_equity += val
             
-            # 必要証拠金計算 (|Position Value| * Margin Ratio)
             m_ratio = margin_ratios.get(ticker, 0.0)
             daily_margin_req += abs(val) * (m_ratio / 100.0)
             
         portfolio_values[i] = daily_equity
         required_margins[i] = daily_margin_req
 
-    # Seriesに変換
     portfolio_series = pd.Series(portfolio_values, index=dates)
     margin_series = pd.Series(required_margins, index=dates)
-    
-    # 日次リターン計算
     daily_returns = portfolio_series.pct_change().fillna(0)
     
     return portfolio_series, margin_series, daily_returns, rebalance_flags
@@ -231,36 +205,27 @@ def calculate_metrics(daily_ret, risk_free_rate_pct=0.0):
     ann_factor = 252
     rf = risk_free_rate_pct / 100.0
     
-    # CAGR
     total_ret = (1 + daily_ret).prod() - 1
-    # 期間が短い場合の補正が必要だが、簡易的に
     n_years = len(daily_ret) / ann_factor
     if n_years > 0:
         cagr = (1 + total_ret) ** (1/n_years) - 1
     else:
         cagr = 0.0
 
-    # Volatility
     volatility = daily_ret.std() * np.sqrt(ann_factor)
     
-    # Sharpe Ratio
-    # (Rp - Rf) / Sigma. Rfは日次に変換して引くのが一般的だが、簡易的に年率で計算
     sharpe = 0.0
     if volatility != 0:
         sharpe = (cagr - rf) / volatility
         
-    # Max Drawdown
     cumulative = (1 + daily_ret).cumprod()
     peak = cumulative.cummax()
     drawdown = (cumulative - peak) / peak
     max_drawdown = drawdown.min()
     
-    # Sortino Ratio
-    # Rfを考慮した下方偏差
     daily_rf = (1 + rf)**(1/ann_factor) - 1
     excess_ret = daily_ret - daily_rf
     downside_ret = excess_ret[excess_ret < 0]
-    
     downside_std = np.sqrt((downside_ret**2).mean()) * np.sqrt(ann_factor)
     
     sortino = 0.0
@@ -280,7 +245,7 @@ def calculate_metrics(daily_ret, risk_free_rate_pct=0.0):
 def main():
     st.set_page_config(page_title="Portfolio Backtester Pro", layout="wide")
 
-    # --- URLパラメータ処理 ---
+    # --- URLパラメータ ---
     query_params = st.query_params
     initial_config = None
     if "config" in query_params:
@@ -292,7 +257,6 @@ def main():
             {'ticker': 'SPY', 'type': 'Long', 'allocation_pct': 50.0, 'margin_ratio': 100.0},
             {'ticker': 'TLT', 'type': 'Long', 'allocation_pct': 30.0, 'margin_ratio': 100.0},
         ]
-        # デフォルト設定
         defaults = {
             'total_investment': 10000.0,
             'start_date': datetime.today() - timedelta(days=365),
@@ -305,9 +269,7 @@ def main():
             st.session_state.risk_free_rate = initial_config.get('risk_free_rate', defaults['risk_free_rate'])
             st.session_state.rebalance_freq = initial_config.get('rebalance_freq', defaults['rebalance_freq'])
             
-            # Assetの復元（margin_ratio互換性対応）
             loaded_assets = initial_config.get('assets', default_assets)
-            # Cash除外 & margin_ratioが無い場合は100(現物)を入れる
             clean_assets = []
             for a in loaded_assets:
                 if a.get('type') == 'Cash': continue
@@ -332,29 +294,26 @@ def main():
 
     st.title("📈 Global Portfolio Backtester Pro")
     
-    # --- サイドバー：全般設定 ---
+    # --- サイドバー ---
     with st.sidebar:
         st.header("Global Settings")
         
-        # 1. 投資額 & リスクフリーレート
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
+        c1, c2 = st.columns(2)
+        with c1:
             total_inv = st.number_input("Initial Capital ($)", value=float(st.session_state.total_investment), step=1000.0, key='total_input')
             st.session_state.total_investment = total_inv
-        with col_g2:
+        with c2:
             rf_rate = st.number_input("Risk Free Rate (%)", value=float(st.session_state.risk_free_rate), step=0.1, key='rf_input')
             st.session_state.risk_free_rate = rf_rate
 
-        # 2. 期間
         start_date_input = st.date_input("Start Date", value=st.session_state.start_date)
         st.session_state.start_date = start_date_input
 
-        # 3. リバランス設定
         freq_options = ['None', 'Daily', 'Weekly', 'Monthly', 'Quarterly', 'Semi-Annually', 'Annually']
         try:
             freq_idx = freq_options.index(st.session_state.rebalance_freq)
         except ValueError:
-            freq_idx = 2 # Default Weekly
+            freq_idx = 2 
             
         rebal_freq = st.selectbox("Rebalance Frequency", freq_options, index=freq_idx, key='rebal_input')
         st.session_state.rebalance_freq = rebal_freq
@@ -365,10 +324,8 @@ def main():
         indices_to_remove = []
         updated_assets = []
         
-        # 4. アセット入力
         for i, asset in enumerate(st.session_state.assets):
             with st.container(border=True):
-                # ヘッダー行（タイトル + 削除ボタン）
                 c_head1, c_head2 = st.columns([0.85, 0.15])
                 with c_head1:
                     st.caption(f"Asset {i+1}")
@@ -376,29 +333,26 @@ def main():
                     if st.button("🗑️", key=f"del_{i}"):
                         indices_to_remove.append(i)
 
-                # 行1: Ticker & Type
                 c1, c2 = st.columns(2)
                 with c1:
                     ticker = st.text_input("Ticker", value=asset['ticker'], key=f"tick_{i}", placeholder="SPY")
                 with c2:
                     pos_type = st.selectbox("Type", ["Long", "Short"], index=["Long", "Short"].index(asset.get('type', 'Long')), key=f"type_{i}")
                 
-                # 行2: Allocation & Margin
                 c3, c4 = st.columns(2)
                 with c3:
                     current_pct = asset.get('allocation_pct', 0.0)
                     new_pct = st.number_input(f"Alloc (%)", value=float(current_pct), step=5.0, key=f"pct_{i}")
                 with c4:
                     current_margin = asset.get('margin_ratio', 100.0)
-                    new_margin = st.number_input(f"Margin (%)", value=float(current_margin), step=10.0, key=f"marg_{i}", help="証拠金率。現物買いなら100%、レバレッジならそれ以下を設定")
+                    new_margin = st.number_input(f"Margin (%)", value=float(current_margin), step=10.0, key=f"marg_{i}")
                 
-                # ガイダンス表示
                 target_amt = total_inv * (new_pct/100)
                 req_margin_amt = target_amt * (new_margin/100)
                 if pos_type == 'Short':
-                    st.caption(f"Short: +${target_amt:,.0f} | Margin Req: ${req_margin_amt:,.0f}")
+                    st.caption(f"Short: +${target_amt:,.0f} | Margin: ${req_margin_amt:,.0f}")
                 else:
-                    st.caption(f"Long: -${target_amt:,.0f} | Margin Req: ${req_margin_amt:,.0f}")
+                    st.caption(f"Long: -${target_amt:,.0f} | Margin: ${req_margin_amt:,.0f}")
 
                 updated_assets.append({
                     'ticker': ticker.upper(), 
@@ -448,12 +402,9 @@ def main():
         st.info("Enter tickers.")
         return
 
-    # Cash計算
     long_pct = df_display[df_display['type'] == 'Long']['allocation_pct'].sum()
     short_pct = df_display[df_display['type'] == 'Short']['allocation_pct'].sum()
     calculated_cash_pct = 100.0 - long_pct + short_pct
-    
-    # 初期必要証拠金の計算
     initial_req_margin_pct = (df_display['allocation_pct'] * df_display['margin_ratio'] / 100.0).sum()
     
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -464,7 +415,6 @@ def main():
                   delta="OK" if initial_req_margin_pct <= 100 else "Over Leverage",
                   delta_color="normal" if initial_req_margin_pct <= 100 else "inverse")
 
-    # 円グラフ
     pie_data = df_display[['ticker', 'allocation_pct', 'type']].copy()
     if calculated_cash_pct != 0:
         pie_data = pd.concat([pie_data, pd.DataFrame([{
@@ -488,32 +438,24 @@ def main():
     if st.button("🚀 Run Backtest"):
         with st.spinner("Calculating..."):
             tickers_to_fetch = [t for t in df_display['ticker'].unique() if t.strip() != '']
-            
             try:
                 prices_df = get_market_data(tickers_to_fetch, st.session_state.start_date)
             except Exception as e:
                 st.error(str(e))
                 return
-
             if prices_df.empty:
                 st.error("No data found.")
                 return
 
-            # コンフィグ作成
             weights_config = {}
             margin_config = {}
-            
             for _, row in df_display.iterrows():
                 w = row['allocation_pct'] / 100.0
-                if row['type'] == 'Short':
-                    w = -1.0 * w
+                if row['type'] == 'Short': w = -1.0 * w
                 weights_config[row['ticker']] = w
                 margin_config[row['ticker']] = row['margin_ratio']
-            
-            # Cashの処理（ウェイトの残余）
             weights_config['CASH'] = calculated_cash_pct / 100.0
 
-            # 計算用DF作成
             calc_df = prices_df.copy()
             if 'CASH' not in calc_df.columns:
                 if calc_df.empty:
@@ -523,21 +465,17 @@ def main():
             else:
                 calc_df['CASH'] = 1.0
 
-            # シミュレーション実行
+            # 計算実行
             equity_curve, margin_curve, daily_returns, rebalance_flags = run_backtest(
                 calc_df, weights_config, total_inv, st.session_state.rebalance_freq, margin_config
             )
 
-            # 指標計算
             metrics = calculate_metrics(daily_returns, risk_free_rate_pct=st.session_state.risk_free_rate)
 
-            # 結果表示
             st.markdown("### 📊 Key Metrics")
             m1, m2, m3, m4, m5, m6 = st.columns(6)
-            
             final_val = equity_curve.iloc[-1]
             total_ret_pct = (final_val / total_inv - 1) * 100
-            
             m1.metric("Final Value", f"${final_val:,.0f}", f"{total_ret_pct:.1f}%")
             m2.metric("CAGR", f"{metrics['cagr']*100:.2f}%")
             m3.metric("Volatility", f"{metrics['volatility']*100:.2f}%")
@@ -545,44 +483,56 @@ def main():
             m5.metric("Max Drawdown", f"{metrics['max_drawdown']*100:.2f}%")
             m6.metric("Sortino Ratio", f"{metrics['sortino']:.2f}")
 
-            # チャート作成
-            fig = go.Figure()
+            # --- チャート描画（サブプロット使用） ---
+            # Row 1: Equity (80%), Row 2: Rebalance Points (20%)
+            fig = make_subplots(
+                rows=2, cols=1, 
+                shared_xaxes=True, 
+                vertical_spacing=0.03, 
+                row_heights=[0.8, 0.2],
+                specs=[[{"secondary_y": False}], [{"secondary_y": False}]]
+            )
             
-            # 1. 資産推移
+            # Row 1: Equity & Margin
             fig.add_trace(go.Scatter(
                 x=equity_curve.index, y=equity_curve.values, 
                 mode='lines', name='Portfolio Equity', 
                 line=dict(width=2, color='#636EFA')
-            ))
+            ), row=1, col=1)
             
-            # 2. 必要証拠金（エリア）
             fig.add_trace(go.Scatter(
                 x=margin_curve.index, y=margin_curve.values,
                 mode='lines', name='Required Margin',
                 fill='tozeroy', line=dict(width=1, color='rgba(239, 85, 59, 0.5)'),
                 fillcolor='rgba(239, 85, 59, 0.1)'
-            ))
+            ), row=1, col=1)
 
-            # 3. リバランスポイント（マーカー）
+            # Row 2: Rebalance Markers
             rebal_dates = equity_curve.index[rebalance_flags]
-            rebal_values = equity_curve[rebalance_flags]
-            
             if len(rebal_dates) > 0:
                 fig.add_trace(go.Scatter(
-                    x=rebal_dates, y=rebal_values,
+                    x=rebal_dates, 
+                    # y=0 に一直線にプロット
+                    y=[0] * len(rebal_dates),
                     mode='markers', name='Rebalance Event',
-                    marker=dict(symbol='diamond', size=8, color='gold', line=dict(width=1, color='black'))
-                ))
+                    marker=dict(symbol='diamond', size=10, color='gold', line=dict(width=1, color='black'))
+                ), row=2, col=1)
 
+            # Layout設定
             fig.update_layout(
-                title=f'Portfolio Value & Margin Requirement ({st.session_state.rebalance_freq})', 
-                xaxis_title='Date', yaxis_title='Value ($)', 
+                title=f'Portfolio Value & Rebalance Events ({st.session_state.rebalance_freq})', 
                 hovermode="x unified",
+                height=600,
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
+            
+            # 軸ラベル調整
+            fig.update_yaxes(title_text="Value ($)", row=1, col=1)
+            fig.update_yaxes(title_text="Event", showticklabels=False, row=2, col=1)
+            fig.update_xaxes(title_text="Date", row=2, col=1)
+
             st.plotly_chart(fig, use_container_width=True)
 
-            # 個別銘柄パフォーマンス
             st.subheader("3. Asset Performance (Base=100)")
             if not prices_df.empty:
                 disp_cols = [c for c in prices_df.columns if c != 'CASH']
