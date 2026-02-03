@@ -18,7 +18,7 @@ with st.sidebar:
     st.markdown("**戦略:**\n\nZスコアに応じてポジション調整。\n乖離が異常値(>2.0)の場合はキャップを適用。")
 
 # データ取得関数（キャッシュして高速化）
-@st.cache_data
+@st.cache_data(ttl=3600)
 def get_data():
     tickers = ['UGL', 'GDX']
     # 過去2年分取得（移動平均計算のため長めに）
