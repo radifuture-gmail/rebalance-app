@@ -387,7 +387,7 @@ def main():
         if st.button("📋 Show Config for Copy"):
             st.caption("枠の右上にあるアイコンをクリックしてコピーし、共有URLの末尾に貼り付けてください。")
             # st.codeを使うことで、標準のコピーボタンが付与されます
-            st.code(f"?config={encoded}", language="text")
+            st.code(f"{encoded}", language="text")
 
         # --- 既存: URLに直接反映するボタン ---
         if st.button("💾 Save Config to URL"):
