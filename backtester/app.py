@@ -373,15 +373,24 @@ def main():
         st.session_state.assets = updated_assets
         st.divider()
         
+        # --- 共通の設定保存用データを作成 ---
+        config_to_save = {
+            'total_investment': st.session_state.total_investment,
+            'risk_free_rate': st.session_state.risk_free_rate,
+            'rebalance_freq': st.session_state.rebalance_freq,
+            'start_date': st.session_state.start_date,
+            'assets': st.session_state.assets
+        }
+        encoded = encode_state(config_to_save)
+
+        # --- 新規追加: URLに反映せずコピー用テキストを表示するボタン ---
+        if st.button("📋 Show Config for Copy"):
+            st.caption("枠の右上にあるアイコンをクリックしてコピーし、共有URLの末尾に貼り付けてください。")
+            # st.codeを使うことで、標準のコピーボタンが付与されます
+            st.code(f"?config={encoded}", language="text")
+
+        # --- 既存: URLに直接反映するボタン ---
         if st.button("💾 Save Config to URL"):
-            config_to_save = {
-                'total_investment': st.session_state.total_investment,
-                'risk_free_rate': st.session_state.risk_free_rate,
-                'rebalance_freq': st.session_state.rebalance_freq,
-                'start_date': st.session_state.start_date,
-                'assets': st.session_state.assets
-            }
-            encoded = encode_state(config_to_save)
             st.query_params["config"] = encoded
             st.success("Config saved to URL!")
 
